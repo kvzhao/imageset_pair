@@ -17,6 +17,8 @@
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/util/io.hpp"
 
+const int kProtoReadBytesLimit = INT_MAX;  // Max size of 2 GB minus 1 byte.
+
 namespace caffe {
 
 using google::protobuf::io::FileInputStream;
@@ -50,7 +52,7 @@ bool ReadProtoFromBinaryFile(const char* filename, Message* proto) {
   CHECK_NE(fd, -1) << "File not found: " << filename;
   ZeroCopyInputStream* raw_input = new FileInputStream(fd);
   CodedInputStream* coded_input = new CodedInputStream(raw_input);
-  coded_input->SetTotalBytesLimit(1073741824, 536870912);
+  coded_input->SetTotalBytesLimit(kProtoReadBytesLimit, 536870912);
 
   bool success = proto->ParseFromCodedStream(coded_input);
 
@@ -83,10 +85,49 @@ cv::Mat ReadImageToCVMat(const string& filename,
   return cv_img;
 }
 
+cv::Mat ReadImageToCVMat(const string& filename,
+    const int height, const int width) {
+  return ReadImageToCVMat(filename, height, width, true);
+}
+
+cv::Mat ReadImageToCVMat(const string& filename,
+    const bool is_color) {
+  return ReadImageToCVMat(filename, 0, 0, is_color);
+}
+
+cv::Mat ReadImageToCVMat(const string& filename) {
+  return ReadImageToCVMat(filename, 0, 0, true);
+}
+// Do the file extension and encoding match?
+static bool matchExt(const std::string & fn,
+                     std::string en) {
+  size_t p = fn.rfind('.');
+  std::string ext = p != fn.npos ? fn.substr(p) : fn;
+  std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+  std::transform(en.begin(), en.end(), en.begin(), ::tolower);
+  if ( ext == en )
+    return true;
+  if ( en == "jpg" && ext == "jpeg" )
+    return true;
+  return false;
+}
 bool ReadImageToDatum(const string& filename, const int label,
-    const int height, const int width, const bool is_color, Datum* datum) {
+    const int height, const int width, const bool is_color,
+    const std::string & encoding, Datum* datum) {
   cv::Mat cv_img = ReadImageToCVMat(filename, height, width, is_color);
   if (cv_img.data) {
+    if (encoding.size()) {
+      if ( (cv_img.channels() == 3) == is_color && !height && !width &&
+          matchExt(filename, encoding) )
+        return ReadFileToDatum(filename, label, datum);
+      std::vector<uchar> buf;
+      cv::imencode("."+encoding, cv_img, buf);
+      datum->set_data(std::string(reinterpret_cast<char*>(&buf[0]),
+                      buf.size()));
+      datum->set_label(label);
+      datum->set_encoded(true);
+      return true;
+    }
     CVMatToDatum(cv_img, datum);
     datum->set_label(label);
     return true;
@@ -95,48 +136,32 @@ bool ReadImageToDatum(const string& filename, const int label,
   }
 }
 
-int get_group_num(int label) {
-   if (label <=20) {
-      return 0;
-   } else if(label <=29) {
-      return 1;
-   } else if(label <=39) {
-      return 2;
-   } else if(label <=59) {
-      return 3;
+bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label,
+  const int height, const int width, const bool is_color,
+  const std::string& encoding, Datum* datum) {
+   cv::Mat cv_img_1 = ReadImageToCVMat(filename_1, height, width, is_color);
+   cv::Mat cv_img_2 = ReadImageToCVMat(filename_2, height, width, is_color);
+   if (cv_img_1.data && cv_img_2.data) {
+      /*
+      if (encoding.size()) {
+         if ( (cv_img_1.channels() ==3) == is_color && !height && !width 
+           && matchExt(filename_1, encoding) && matchExt(filename_2,encoding) )
+            //TODO: ReadPairFileToDatum(f1, f2, label, datum)
+            return false;
+         std::vector<uchar> buf;
+         cv::imencode("."+encoding, cv_img_1, buf);
+         datum->set_data(std::string(reinterpret_cast<char*>(&buf[0]), buf.size()));
+         datum->set_label(label);
+         datum->set_encoded(true);
+         //TODO: set two img
+         return false;
+      }*/
+      PairCVMatToDatum(cv_img_1, cv_img_2, datum);
+      datum->set_label(label);
+      return true;
    } else {
-      return 4;
+      return false;
    }
-}
-
-int label_grouping(int img_label, int base_label) {
-   /*
-   if (get_group_num(img_label) == get_group_num(base_label)) {
-      return 0;
-   } else if (get_group_num(img_label) > get_group_num(base_label)) {
-      return 1;
-   } else {
-      return 2;
-   } */
-   if (get_group_num(img_label) > get_group_num(base_label)) {
-      return 1; 
-   } else {
-      return 0;
-   }
-}
-
-bool ReadImagePairToDatum(const string& file1, const int label1, 
-  const string& file2, const int label2, const int height, const int width,
-  const bool is_color, Datum* datum) {
-  cv::Mat cv_img  = ReadImageToCVMat(file1, height, width, is_color);
-  cv::Mat cv_base = ReadImageToCVMat(file2, height, width, is_color);
-  if (cv_img.data && cv_base.data) {
-    PairCVMatToDatum(cv_img, cv_base, datum);
-    datum->set_label(label_grouping(label1, label2));
-    return true;
-  } else {
-    return false;
-  }
 }
 
 bool ReadFileToDatum(const string& filename, const int label,
@@ -159,20 +184,25 @@ bool ReadFileToDatum(const string& filename, const int label,
   }
 }
 
-cv::Mat DecodeDatumToCVMat(const Datum& datum,
-    const int height, const int width, const bool is_color) {
+cv::Mat DecodeDatumToCVMatNative(const Datum& datum) {
   cv::Mat cv_img;
   CHECK(datum.encoded()) << "Datum not encoded";
-  int cv_read_flag = (is_color ? CV_LOAD_IMAGE_COLOR :
-    CV_LOAD_IMAGE_GRAYSCALE);
   const string& data = datum.data();
   std::vector<char> vec_data(data.c_str(), data.c_str() + data.size());
-  if (height > 0 && width > 0) {
-    cv::Mat cv_img_origin = cv::imdecode(cv::Mat(vec_data), cv_read_flag);
-    cv::resize(cv_img_origin, cv_img, cv::Size(width, height));
-  } else {
-    cv_img = cv::imdecode(vec_data, cv_read_flag);
+  cv_img = cv::imdecode(vec_data, -1);
+  if (!cv_img.data) {
+    LOG(ERROR) << "Could not decode datum ";
   }
+  return cv_img;
+}
+cv::Mat DecodeDatumToCVMat(const Datum& datum, bool is_color) {
+  cv::Mat cv_img;
+  CHECK(datum.encoded()) << "Datum not encoded";
+  const string& data = datum.data();
+  std::vector<char> vec_data(data.c_str(), data.c_str() + data.size());
+  int cv_read_flag = (is_color ? CV_LOAD_IMAGE_COLOR :
+    CV_LOAD_IMAGE_GRAYSCALE);
+  cv_img = cv::imdecode(vec_data, cv_read_flag);
   if (!cv_img.data) {
     LOG(ERROR) << "Could not decode datum ";
   }
@@ -180,12 +210,19 @@ cv::Mat DecodeDatumToCVMat(const Datum& datum,
 }
 
 // If Datum is encoded will decoded using DecodeDatumToCVMat and CVMatToDatum
-// if height and width are set it will resize it
 // If Datum is not encoded will do nothing
-bool DecodeDatum(const int height, const int width, const bool is_color,
-                Datum* datum) {
+bool DecodeDatumNative(Datum* datum) {
   if (datum->encoded()) {
-    cv::Mat cv_img = DecodeDatumToCVMat((*datum), height, width, is_color);
+    cv::Mat cv_img = DecodeDatumToCVMatNative((*datum));
+    CVMatToDatum(cv_img, datum);
+    return true;
+  } else {
+    return false;
+  }
+}
+bool DecodeDatum(Datum* datum, bool is_color) {
+  if (datum->encoded()) {
+    cv::Mat cv_img = DecodeDatumToCVMat((*datum), is_color);
     CVMatToDatum(cv_img, datum);
     return true;
   } else {
@@ -219,63 +256,44 @@ void CVMatToDatum(const cv::Mat& cv_img, Datum* datum) {
   datum->set_data(buffer);
 }
 
-void PairCVMatToDatum(const cv::Mat& cv_img1, const cv::Mat& cv_img2, Datum* datum) {
-   //LOG(ERROR) << "PairCVMatToDatum is called";
-  CHECK(cv_img1.depth() == CV_8U) << "Image 1 data type must be unsigned byte";
-  CHECK(cv_img2.depth() == CV_8U) << "Image 2 data type must be unsigned byte";
-  CHECK(cv_img1.size() == cv_img2.size()) << "Image 1 & 2 are not equal size";
-  const int img_num = 2;
-  // tricks here
-  // one channel for each image in the pair (they should be same size)
-  // datum->set_channels(cv_img.channels());
-  int img_channels = cv_img1.channels();
-  datum->set_channels(img_num * img_channels);
-  datum->set_height(cv_img1.rows);
-  datum->set_width(cv_img1.cols);
-  datum->clear_data();
-  datum->clear_float_data();
-  datum->set_encoded(false);
-  int single_img_size = cv_img1.channels()*cv_img1.cols*cv_img1.rows;
-
-  int datum_channels = datum->channels();
-  int datum_height = datum->height();
-  int datum_width = datum->width();
-  int datum_size = datum_channels * datum_height * datum_width;
-  
-  CHECK(datum_size == 2 * single_img_size) << "Datum is not equal 2 times of images!";
-
-//  LOG(ERROR) << "img ch: " << img_channels 
-//    << "\tdataum ch: " << datum_channels;
-
-  std::string buffer(datum_size, ' ');
-  int datum_index;
-  // first image
-     for (int h = 0; h < datum_height; ++h) {
-        const uchar* ptr = cv_img1.ptr<uchar>(h);
-        int img_index = 0;
-        for (int w = 0; w < datum_width; ++w) {
-          for (int c = 0; c < img_channels; ++c) {
-            int datum_index = (c * datum_height + h) * datum_width + w;
-            buffer[datum_index] = static_cast<char>(ptr[img_index++]);
-          }
-        }
-     }
-   const int one_image_offset = img_channels * datum_height * datum_width;
-  // LOG(ERROR) <<"Offset: " << one_image_offset << " = "
-  //    << datum_height << " * " << datum_width << " * " << img_channels;
-  // second image
-  for (int h = 0; h < datum_height; ++h) {
-    const uchar* ptr = cv_img2.ptr<uchar>(h);
-    int img_index = 0;
-    for (int w = 0; w < datum_width; ++w) {
-      for (int c = 0; c < img_channels; ++c) {
-         int datum_index = (c * datum_height + h) * datum_width + w 
-                            + one_image_offset;
-         buffer[datum_index] = static_cast<char>(ptr[img_index++]);
+void PairCVMatToDatum(const cv::Mat& cv_img_1, const cv::Mat& cv_img_2, Datum* datum) {
+   CHECK(cv_img_1.depth() == CV_8U) << "Image data type must be unsigned byte";
+   CHECK(cv_img_2.depth() == CV_8U) << "Image data type must be unsigned byte";
+   //CHECK(cv_img_2.size() == cv_img_1.size()) << "Image pair should be equal size";
+   // two image should be eqaul width and height
+   const int img_width = cv_img_1.cols; 
+   const int img_height = cv_img_1.rows;
+   const int img_channels = cv_img_1.channels();
+   datum->set_channels(2 * img_channels);  // channels should be equal
+   datum->set_height(img_height);
+   datum->set_width(img_width);
+   datum->clear_data();
+   datum->clear_float_data();
+   datum->set_encoded(false);
+   int datum_channels = datum->channels();
+   int datum_height = datum->height();
+   int datum_width   = datum->width();
+   int datum_size = datum_channels * datum_height * datum_width;
+   std::string buffer(datum_size, ' ');
+   // convert cv mat to datum
+   const int img_offset = img_channels * datum_height * datum_height;
+   
+   for (int h = 0; h < datum_height; ++h) {
+      const uchar* ptr_1 = cv_img_1.ptr<uchar>(h);
+      const uchar* ptr_2 = cv_img_2.ptr<uchar>(h);
+      int img_index = 0;
+      for (int w = 0; w < datum_width; ++w) {
+         for(int c = 0; c < img_channels; ++c) {
+            int upper_index = (c * datum_height + h) * datum_width + w;
+              int lower_index = upper_index + img_offset;
+              buffer[upper_index] = static_cast<char>(ptr_1[img_index]);
+              buffer[lower_index] = static_cast<char>(ptr_2[img_index]);
+              img_index++;
+         }
       }
-    }
- }
-  datum->set_data(buffer);
+   }
+
+   datum->set_data(buffer);
 }
 
 // Verifies format of data stored in HDF5 file and reshapes blob accordingly.
@@ -302,11 +320,11 @@ void hdf5_load_nd_dataset_helper(
   CHECK_GE(status, 0) << "Failed to get dataset info for " << dataset_name_;
   CHECK_EQ(class_, H5T_FLOAT) << "Expected float or double data";
 
-  blob->Reshape(
-    dims[0],
-    (dims.size() > 1) ? dims[1] : 1,
-    (dims.size() > 2) ? dims[2] : 1,
-    (dims.size() > 3) ? dims[3] : 1);
+  vector<int> blob_dims(dims.size());
+  for (int i = 0; i < dims.size(); ++i) {
+    blob_dims[i] = dims[i];
+  }
+  blob->Reshape(blob_dims);
 }
 
 template <>
@@ -329,7 +347,7 @@ void hdf5_load_nd_dataset<double>(hid_t file_id, const char* dataset_name_,
 
 template <>
 void hdf5_save_nd_dataset<float>(
-    const hid_t file_id, const string dataset_name, const Blob<float>& blob) {
+    const hid_t file_id, const string& dataset_name, const Blob<float>& blob) {
   hsize_t dims[HDF5_NUM_DIMS];
   dims[0] = blob.num();
   dims[1] = blob.channels();
@@ -342,7 +360,7 @@ void hdf5_save_nd_dataset<float>(
 
 template <>
 void hdf5_save_nd_dataset<double>(
-    const hid_t file_id, const string dataset_name, const Blob<double>& blob) {
+    const hid_t file_id, const string& dataset_name, const Blob<double>& blob) {
   hsize_t dims[HDF5_NUM_DIMS];
   dims[0] = blob.num();
   dims[1] = blob.channels();

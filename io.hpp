@@ -1,10 +1,6 @@
 #ifndef CAFFE_UTIL_IO_H_
 #define CAFFE_UTIL_IO_H_
 
-#ifndef OSX
-#include <opencv2/core/core.hpp>
-#endif
-
 #include <unistd.h>
 #include <string>
 
@@ -13,6 +9,7 @@
 #include "hdf5_hl.h"
 
 #include "caffe/blob.hpp"
+#include "caffe/common.hpp"
 #include "caffe/proto/caffe.pb.h"
 
 #define HDF5_NUM_DIMS 4
@@ -95,7 +92,14 @@ inline bool ReadFileToDatum(const string& filename, Datum* datum) {
 }
 
 bool ReadImageToDatum(const string& filename, const int label,
-    const int height, const int width, const bool is_color, Datum* datum);
+    const int height, const int width, const bool is_color,
+    const std::string & encoding, Datum* datum);
+
+inline bool ReadImageToDatum(const string& filename, const int label,
+    const int height, const int width, const bool is_color, Datum* datum) {
+  return ReadImageToDatum(filename, label, height, width, is_color,
+                          "", datum);
+}
 
 inline bool ReadImageToDatum(const string& filename, const int label,
     const int height, const int width, Datum* datum) {
@@ -112,94 +116,71 @@ inline bool ReadImageToDatum(const string& filename, const int label,
   return ReadImageToDatum(filename, label, 0, 0, true, datum);
 }
 
-bool ReadImagePairToDatum(const string& file1, const int label,
-  const string& file2, const int label2, const int hieght, const int width, const bool is_color, Datum* datum);
-
-inline bool ReadImagePairToDatum(const string& filename, const int label,
-	const string& filename2, const int label2,
-    const int height, const int width, Datum* datum) {
-  return ReadImagePairToDatum(filename, label, filename2, label2, height, width, true, datum);
+inline bool ReadImageToDatum(const string& filename, const int label,
+    const std::string & encoding, Datum* datum) {
+  return ReadImageToDatum(filename, label, 0, 0, true, encoding, datum);
 }
 
-inline bool ReadImagePairToDatum(const string& filename, const int label,
-	const string& filename2, const int label2,
-    const bool is_color, Datum* datum) {
-  return ReadImagePairToDatum(filename, label, filename2, label2, 0, 0, is_color, datum);
+// Our method to concatenate datum pair
+bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label, const int height, const int width, const bool is_color, const std::string& encoding, Datum* datum);
+
+// five kinds of overloaded functions
+// without encoding option
+inline bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label, const int height, const int width, const bool is_color, Datum* datum){ 
+   return ReadImagePairToDatum(filename_1, filename_2, label, height, width, is_color, "", datum);
+}
+// without is_color option
+inline bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label, const int height, const int width, Datum* datum){ 
+   return ReadImagePairToDatum(filename_1, filename_2, label, height, width, true, datum);
+}
+// without resize option
+inline bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label, const bool is_color, Datum* datum){ 
+   return ReadImagePairToDatum(filename_1, filename_2, label, 0, 0, is_color, datum);
+}
+// without resize and color option
+inline bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label, Datum* datum){ 
+   return ReadImagePairToDatum(filename_1, filename_2, label, 0, 0, true, datum);
+}
+// with encoding
+inline bool ReadImagePairToDatum(const string& filename_1, const string& filename_2, const int label,
+    const std::string & encoding, Datum* datum) {
+  return ReadImagePairToDatum(filename_1, filename_2, label, 0, 0, true, encoding, datum);
 }
 
-inline bool ReadImagePairToDatum(const string& filename, const int label,
-	const string& filename2, const int label2,
-    Datum* datum) {
-  return ReadImagePairToDatum(filename, label, filename2, label2, 0, 0, true, datum);
-}
+bool DecodeDatumNative(Datum* datum);
+bool DecodeDatum(Datum* datum, bool is_color);
 
-bool DecodeDatum(const int height, const int width, const bool is_color,
-  Datum* datum);
-
-inline bool DecodeDatum(const int height, const int width, Datum* datum) {
-  return DecodeDatum(height, width, true, datum);
-}
-
-inline bool DecodeDatum(const bool is_color, Datum* datum) {
-  return DecodeDatum(0, 0, is_color, datum);
-}
-
-inline bool DecodeDatum(Datum* datum) {
-  return DecodeDatum(0, 0, true, datum);
-}
-
-#ifndef OSX
 cv::Mat ReadImageToCVMat(const string& filename,
     const int height, const int width, const bool is_color);
 
-inline cv::Mat ReadImageToCVMat(const string& filename,
-    const int height, const int width) {
-  return ReadImageToCVMat(filename, height, width, true);
-}
+cv::Mat ReadImageToCVMat(const string& filename,
+    const int height, const int width);
 
-inline cv::Mat ReadImageToCVMat(const string& filename,
-    const bool is_color) {
-  return ReadImageToCVMat(filename, 0, 0, is_color);
-}
+cv::Mat ReadImageToCVMat(const string& filename,
+    const bool is_color);
 
-inline cv::Mat ReadImageToCVMat(const string& filename) {
-  return ReadImageToCVMat(filename, 0, 0, true);
-}
+cv::Mat ReadImageToCVMat(const string& filename);
 
-cv::Mat DecodeDatumToCVMat(const Datum& datum,
-    const int height, const int width, const bool is_color);
-
-inline cv::Mat DecodeDatumToCVMat(const Datum& datum,
-    const int height, const int width) {
-  return DecodeDatumToCVMat(datum, height, width, true);
-}
-
-inline cv::Mat DecodeDatumToCVMat(const Datum& datum,
-    const bool is_color) {
-  return DecodeDatumToCVMat(datum, 0, 0, is_color);
-}
-
-inline cv::Mat DecodeDatumToCVMat(const Datum& datum) {
-  return DecodeDatumToCVMat(datum, 0, 0, true);
-}
+cv::Mat DecodeDatumToCVMatNative(const Datum& datum);
+cv::Mat DecodeDatumToCVMat(const Datum& datum, bool is_color);
 
 void CVMatToDatum(const cv::Mat& cv_img, Datum* datum);
-void PairCVMatToDatum(const cv::Mat& cv_img1, const cv::Mat& cv_img2, Datum* datum);
-#endif
+// we need this
+void PairCVMatToDatum(const cv::Mat& cv_img_1, const cv::Mat& cv_img_2, Datum* datum);
 
 template <typename Dtype>
 void hdf5_load_nd_dataset_helper(
-  hid_t file_id, const char* dataset_name_, int min_dim, int max_dim,
-  Blob<Dtype>* blob);
+    hid_t file_id, const char* dataset_name_, int min_dim, int max_dim,
+    Blob<Dtype>* blob);
 
 template <typename Dtype>
 void hdf5_load_nd_dataset(
-  hid_t file_id, const char* dataset_name_, int min_dim, int max_dim,
-  Blob<Dtype>* blob);
+    hid_t file_id, const char* dataset_name_, int min_dim, int max_dim,
+    Blob<Dtype>* blob);
 
 template <typename Dtype>
 void hdf5_save_nd_dataset(
-  const hid_t file_id, const string dataset_name, const Blob<Dtype>& blob);
+    const hid_t file_id, const string& dataset_name, const Blob<Dtype>& blob);
 
 }  // namespace caffe
 
